@@ -1,0 +1,242 @@
+// modified open source code by C. Brown
+// To run Arduino Pro mini with sparkfun Spectrum Shield
+// and motor drive (two DC motors possible to drive)
+
+const int LEDPIN = 13;  //lights when sound sufficient to move jaw
+const int PIN_STROBE = 5; // digital from spectrum shield
+const int PIN_RESET = 4; // digital from spectrum shield
+const int PIN_LEFT = 0;// analog L from spectrum shield
+const int PIN_RIGHT = 1; // analog R from spectrum shield
+
+const int motor1PotPin = 2; //analog potentiometer on jaw motor
+const int motor1Pin_O = 3; //digital PWM open
+const int motor1Pin_C = 6; //digital PWM close
+const int motorSleep = 7; //digital reset on motor board
+const int motorStall = 8; //digital sleep on motor board
+
+// spectrum shield L anf R EQ band arrays
+int left[7]; 
+int right[7];
+
+int Speed; //new PMW speed
+int SpeedF; //speed for forward motion
+int SpeedR; //speed for reverse motion
+int currentSpeed = 0; //current PMW speed
+
+int motor1PositionPinRaw; //potentiometer value on jaw motor (motor1)
+
+int mouthPotMin; // reading with mouth closed all the way
+int mouthPotMax; //reading with mouth open all the way
+int audioThreshold; //ignore signals below this number
+int posError; //amount of buffer for positioning
+int targetL; //target - error
+int targetH; // target + error
+int current_mouthPosition; //from jaw position sensor
+int target_mouthPosition; //from Arduino controller
+
+int sumRight; //sum of audio from right channel
+int sumLeft; //sum of audio from left channel
+
+void setup() {
+  
+  // make sure the Serial Monitor uses the same baud rate
+ // Serial.begin(115200);    // Set up a serial output for data display and changing parameters
+  
+  // initialize the digital pin as an output.
+  pinMode(LEDPIN, OUTPUT); // LED
+  //initialize eq
+  pinMode(PIN_RESET, OUTPUT); // reset
+  pinMode(PIN_STROBE, OUTPUT); // strobe
+  digitalWrite(PIN_RESET,LOW); // reset low
+  digitalWrite(PIN_STROBE,HIGH); //pin 5 is RESET on the shield
+  
+  pinMode(motor1PotPin, INPUT); // jaw position sensor
+  
+  //audio sensor in
+  pinMode(PIN_LEFT, INPUT); 
+  pinMode(PIN_RIGHT, INPUT); 
+    
+  // motor controller pins
+  pinMode(motor1Pin_O, OUTPUT); // motor controller Forward
+  pinMode(motor1Pin_C, OUTPUT); //motor controller Reverse
+  pinMode(motorStall, INPUT); // see motor controller data sheet for use
+  pinMode(motorSleep, OUTPUT); // see motor controller data sheet for use
+  
+  delay(500);
+  
+//  Serial.println("Start program...");
+//  Serial.println("Uncomment in the code ");
+//  Serial.println("the Serial.print lines ");
+//  Serial.println("you want to see here in ");
+//  Serial.println("the Serial Monitor");
+  
+  mouthPotMin = 300; //reading with mouth closed all the way
+  mouthPotMax = 600; //reading with mouth open all the way
+  audioThreshold = 10;  //prevent noise from triggering mouth
+  Speed = 0; //motor speed
+  SpeedF = 225; // max forward motor speed via PWM (0-255)
+  SpeedR = 50; // max reverse motor speed via PWM (0-255)
+  posError = 50; //add some buffer for positional error
+
+}
+
+// Main loop
+void loop() {
+
+  readMSGEQ7(); //refresh EQ arrays L and R
+  checkPotPins(); //check for change in jaw position sensor
+  
+  if(sumLeft <= audioThreshold) {
+    sumLeft = 0;
+  }
+  if(sumRight <= audioThreshold) {
+    sumRight = 0;
+  }
+  if(sumLeft>500) {
+    sumLeft =500;
+  }
+  target_mouthPosition = map(sumLeft, 0,500, mouthPotMin,mouthPotMax);
+  targetH = target_mouthPosition + posError;
+  targetL = target_mouthPosition - posError;
+//  Serial.print("current_mouthPosition: ");
+//  Serial.print(current_mouthPosition);
+//  Serial.print(", target_mouthPosition: ");
+//  Serial.print(target_mouthPosition);
+//  Serial.print(", sumRight: ");
+//  Serial.print(sumRight);
+//  Serial.print(", sumLeft: ");
+//  Serial.println(sumLeft);
+  
+  
+  
+  if(target_mouthPosition == 0)  //close mouth
+  {
+     motorReverse(SpeedR);
+     checkPotPins();
+     //Serial.println("close - Do motorReverse" );
+  }
+  else if(target_mouthPosition > current_mouthPosition)
+  {
+    motorForward(SpeedF);
+    checkPotPins();
+    //Serial.println("open - Do motorForward" );
+  }
+  else if (target_mouthPosition < current_mouthPosition)
+  {
+     motorReverse(SpeedR);
+     checkPotPins();
+     //Serial.println("close - DO motorReverse" );
+  }
+    
+  else 
+    {
+      motorStop(0);
+      //Serial.println("Do motorStop" );
+    }
+  
+  delay(20);
+
+}  // End main loop
+
+void readMSGEQ7()
+{
+	//reset the data
+	digitalWrite(PIN_RESET, HIGH);
+	digitalWrite(PIN_RESET, LOW);
+	
+	//loop thru all 7 bands
+        sumRight = 0;
+        sumLeft = 0;
+        
+	for(int band=0; band < 7; band++) {
+		digitalWrite(PIN_STROBE,LOW); // go to the next band 
+		delayMicroseconds(20); //gather some data
+		left[band] = analogRead(PIN_LEFT); // store left band reading
+		//right[band] = left[band]; //usethis only for MONO!
+                right[band] = analogRead(PIN_RIGHT); // store right band reading
+		digitalWrite(PIN_STROBE,HIGH); // reset the strobe pin
+            
+            //cut out bands 1(0) and 7(6), do only '1-5'
+            if(band != 0 && band != 6) {
+               sumRight = sumRight+right[band];
+               sumLeft = sumLeft+left[band];
+             }
+//             Serial.print(" right[");
+//             Serial.print(band);
+//             Serial.print("]: " );
+//             Serial.print(right[band]);
+//             Serial.print(", left[");
+//             Serial.print(band);
+//             Serial.print("]: " );
+//             Serial.println(left[band]);
+             
+             
+             if(left[band] > audioThreshold) {
+               digitalWrite(LEDPIN,HIGH);
+             }
+             else {
+               digitalWrite(LEDPIN,LOW); // reset low
+             }
+             
+           }
+}
+
+void checkPotPins()
+{
+  motor1PositionPinRaw = analogRead(motor1PotPin); //jaw position sensor (potentiometer)
+  current_mouthPosition = motor1PositionPinRaw; //set to current mouth position
+}
+
+
+void motorForward(int Speed) //open
+{
+   //checkPotPins();
+//   Serial.println("-----------------------------" );
+//   Serial.println("motorForward" );  
+//   Serial.println("-----------------------------" );
+   if(current_mouthPosition < targetL)
+   {
+    analogWrite(motor1Pin_O, Speed);
+    analogWrite(motor1Pin_C, 0);
+    currentSpeed = Speed; //save the current speed
+   }
+   else
+   {
+     motorStop(0);
+//     Serial.println("greater than targetL, motorStop" ); 
+   }
+}
+
+void motorReverse(int Speed)//close
+{
+ //checkPotPins();
+// Serial.println("-----------------------------" );
+// Serial.println("motorReverse" );  
+// Serial.println("-----------------------------" );
+ if(current_mouthPosition < 400)
+ {
+   Speed = Speed/2;
+ }
+ if(current_mouthPosition > targetH)
+   {
+    analogWrite(motor1Pin_O, 0);
+    analogWrite(motor1Pin_C, Speed);
+    currentSpeed = Speed; //save the current speed
+   }
+   else
+   {
+     motorStop(0);
+//     Serial.println("less than targetH, motorStop" ); 
+   }
+}
+
+void motorStop(int Speed)//CW rotation
+{
+
+//  Serial.println("motor forward to stop");
+    analogWrite(motor1Pin_O, 0);
+    analogWrite(motor1Pin_C, 0);
+//   Serial.println("-----------------------------" );
+//   Serial.println("motorStop" );  
+//   Serial.println("-----------------------------" );
+}
